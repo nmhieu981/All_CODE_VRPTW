@@ -103,28 +103,12 @@ flowchart TD
     style J fill:#00BCD4,color:#fff
 ```
 
-**Giải thích workflow chi tiết:**
-
-**Bước 1 — Input & Preference Model:** Thuật toán nhận dữ liệu VRPTW từ file Solomon benchmark (tọa độ, nhu cầu, time window, thời gian phục vụ của $n$ khách hàng, cùng thông số xe $K$, $Q$). Song song, DM cung cấp preference: điểm tham chiếu $g = [g_1, g_2, g_3]$ thể hiện mong muốn cho 3 mục tiêu, vector trọng số $w = [w_1, w_2, w_3]$ thể hiện mức quan trọng tương đối, và bán kính ROI $\delta$ kiểm soát vùng tìm kiếm. Nếu DM không cung cấp, hệ thống auto-calibrate ở bước 3.
-
-**Bước 2 — Khởi tạo Quần thể ($N = 100$):** Quần thể được chia thành 2 tầng: **Tier 1** (~33 lời giải) được sinh từ các heuristic xây dựng (Clarke-Wright, Nearest Neighbour, 6 Insertion variants) và đã qua local search nặng — đóng vai trò "hạt giống chất lượng cao"; **Tier 2** (~67 lời giải) là random keys $\sim \mathcal{U}(0,1)$ — đóng vai trò đảm bảo đa dạng, phủ các vùng không gian mà heuristic chưa khám phá. Tỷ lệ 33/67 được thiết kế để cân bằng exploitation (bắt đầu từ vùng tốt) vs exploration (không bị kẹt sớm).
-
-**Bước 3 — Auto-Calibration:** Sau khi có quần thể ban đầu, hệ thống phân tích giá trị 3 mục tiêu của tất cả lời giải khả thi, tính ideal point (min mỗi mục tiêu) và phân vị thứ 10. Điểm tham chiếu $g$ được hiệu chỉnh: $g_i = \text{ideal}_i + 0.1 \times (p_{10,i} - \text{ideal}_i)$. Bước này đảm bảo $g$ vừa "tham" (gần ideal) nhưng vẫn "khả thi" (dựa trên phân bố thực tế), tránh trường hợp DM đặt $g$ quá lý tưởng khiến ASF vô nghĩa.
-
-**Bước 4 — Vòng lặp Tiến hóa:** Đây là phần cốt lõi, chạy cho đến khi hết ngân sách thời gian $t_{\text{run}}$ (thường 60s). Mỗi thế hệ gồm 8 bước tuần tự:
-- **(4a)** Non-dominated Sorting phân quần thể thành các front $F_0, F_1, \ldots$ theo quan hệ Pareto dominance
-- **(4b)** Crowding Distance tính cho mỗi front để đánh giá mật độ — lời giải ở vùng thưa được ưu tiên
-- **(4c)** gBest Selection chọn lời giải "lãnh đạo" từ $F_0$ bằng binary tournament kết hợp ASF
-- **(4d)** Mỗi cá thể được cập nhật bằng **SSO** (80%, hoạt động ở mức keys liên tục) hoặc **ABS** (20%, hoạt động ở mức route rời rạc) — hai cơ chế bổ sung nhau
-- **(4e)** Pipeline Local Search cải thiện mỗi offspring bằng 2-opt, Or-opt, Relocate, Swap, Cross-Exchange
-- **(4f)** Archive cập nhật bằng ε-dominance, lưu trữ non-dominated solutions tốt nhất
-- **(4g)** (μ+λ) Selection chọn $N$ cá thể sống sót cho thế hệ tiếp theo
-- **(4h)** Adaptive Control kiểm tra trì trệ và điều chỉnh $p_{\text{abs}}$, $p_m$
-
-**Bước 5 — Output:** Khi hết thời gian, thuật toán trả về: (1) **Pareto front** từ Archive — tập lời giải non-dominated, tập trung quanh vùng ROI; (2) **Best ASF solution** — lời giải đơn lẻ gần nhất với preference $g$, phù hợp khi DM cần chọn 1 lời giải duy nhất.
-
-> [!NOTE]
-> Luồng tổng quan cho thấy thiết kế **modular**: mỗi module (Preference, Init, SSO, ABS, LS, Archive, Adaptive) hoạt động độc lập và có thể thay thế/nâng cấp riêng lẻ mà không ảnh hưởng pipeline.
+**Giải thích workflow:**
+1. **Input → Preference:** Thuật toán nhận dữ liệu VRPTW và thiết lập preference (điểm tham chiếu $g$, trọng số $w$, bán kính ROI $\delta$).
+2. **Khởi tạo:** Tạo quần thể ban đầu pha trộn giữa heuristic seeds chất lượng cao (33%) và random keys đa dạng (67%).
+3. **Auto-Calibration:** Tự động hiệu chỉnh $g$ dựa trên chất lượng quần thể ban đầu.
+4. **Vòng lặp chính:** Lặp cho đến khi hết thời gian ($t_{\text{run}}$), mỗi thế hệ gồm: Ranking → gBest → SSO/ABS → Local Search → Archive → Selection → Adaptive Control.
+5. **Output:** Trả về Pareto front từ Archive và lời giải tốt nhất theo ASF.
 
 ---
 
@@ -172,29 +156,12 @@ flowchart TD
     style PH3 fill:#9C27B0,color:#fff
 ```
 
-**Giải thích workflow chi tiết:**
-
-**Phân chia ngân sách (33/67):** Quần thể $N = 100$ được chia thành ~33 slot cho heuristic seeds và ~67 slot cho random keys. Con số 33% được chọn vì: (a) đủ nhiều để cung cấp nhiều hướng tìm kiếm khác nhau cho SSO, (b) đủ ít để không lấn chiếm diversity — nếu quá nhiều heuristic seeds, quần thể sẽ tập trung ở vùng cục bộ.
-
-**Phase 1 — 8 Heuristic Song Song:** Tám chiến lược xây dựng được chạy đồng thời, mỗi chiến lược tối ưu cho một khía cạnh khác nhau của bài toán:
-- **Clarke-Wright Savings:** Bắt đầu với mỗi khách hàng 1 route, lặp gộp cặp route có savings $s_{ij} = d_{0i} + d_{0j} - d_{ij}$ lớn nhất → **giảm thiểu số xe** vì gộp route tiết kiệm chuyến.
-- **Nearest Neighbour:** Tham lam chọn khách gần nhất → route chặt về khoảng cách cục bộ → **tốt cho $f_1$**.
-- **6 Insertion variants:** Mỗi variant sắp xếp khách hàng theo một tiêu chí khác nhau (deadline, ready time, demand, distance, góc cực, TW center) rồi chèn tuần tự → mỗi sort key tạo ra **cấu trúc route hoàn toàn khác nhau**. Ví dụ: INS-angle tạo route hình quạt (cluster theo hướng), INS-ready tạo route theo dòng thời gian (cluster theo thời gian).
-
-Kết quả Phase 1: 8 lời giải với cấu trúc route đa dạng, chưa được tối ưu cục bộ (chất lượng trung bình nhưng đa dạng cao).
-
-**Phase 2 — Full Local Search cho Top-2:** Sắp xếp 8 ứng viên theo tổng quãng đường $f_1$, chọn 2 tốt nhất. Áp dụng pipeline LS đầy đủ: 2-opt + Or-opt (tối ưu trong-route) → Relocate + Swap + Cross-Exchange (tối ưu giữa-route) → Ruin-and-Recreate (thoát cực trị). Tại sao chỉ top-2? Full LS rất tốn thời gian (~3–5s/lời giải với $n=100$), nếu áp dụng cho cả 8 sẽ tốn 24–40s — chiếm hầu hết ngân sách $t_{\text{run}} = 60$s. Top-2 là trade-off tối ưu: đầu tư tính toán vào lời giải có "nền tảng" tốt nhất.
-
-**Phase 3 — 200 lần Ruin-and-Recreate:** Trên kết quả tốt nhất từ Phase 2, chạy thêm 200 vòng R&R — mỗi vòng phá hủy ngẫu nhiên 15–40% khách hàng rồi chèn lại tối ưu theo deadline. Đây là "đánh bóng" cuối cùng, giúp thoát khỏi local optima mà Phase 2 chưa thoát được. Số vòng 200 đủ lớn để khám phá nhiều cấu trúc khác nhau nhưng vẫn nằm trong ngân sách thời gian ($\min(40\% \times t_{\text{run}}, 15s)$).
-
-**Perturbation — Tạo biến thể:** Mỗi heuristic seed tốt nhất được nhân bản thành 3 biến thể bằng cách thêm nhiễu uniform $\varepsilon \sim \mathcal{U}(-\sigma, \sigma)$ vào keys, với $\sigma \in \{0.05, 0.10, 0.15\}$. Mức $\sigma = 0.05$ tạo biến thể "gần giống gốc" (chỉ 1–2 khách đổi thứ tự), $\sigma = 0.15$ tạo biến thể "khác biệt rõ" (nhiều khách đổi route). Perturbation đảm bảo SSO có "quần thể lân cận" quanh mỗi lời giải tốt — khi cross-over giữa chúng, thuật toán khám phá vùng xung quanh lời giải heuristic một cách có hệ thống.
-
-**Smart Route Merging:** Kiểm tra $\text{avg\_utilization} = \frac{\text{total\_demand}}{K \times Q}$. Nếu $< 60\%$ (xe còn dư nhiều tải), thử gộp route ngắn nhất vào các route khác. Nếu tất cả khách hàng trong route ngắn đều chèn được và tổng quãng đường tăng $\leq 5\%$ → chấp nhận gộp → giảm 1 xe. Threshold 5% vì giảm 1 xe tiết kiệm chi phí cố định lớn (lương, bảo hiểm, khấu hao).
-
-**Reverse Encoding:** Cuối cùng, tất cả lời giải dạng route được chuyển ngược về dạng random-key vector $[0,1)^{n_{\text{var}}}$ bằng công thức $\text{keys}[z_i-1] \sim \mathcal{U}(i/n_{\text{var}}, (i+1)/n_{\text{var}})$ — để SSO có thể thao tác trên không gian liên tục.
-
-> [!TIP]
-> Pipeline khởi tạo 3 pha này tuân theo nguyên tắc **"funnel"**: Phase 1 tạo đa dạng rộng (8 heuristic) → Phase 2 lọc và đầu tư sâu (top-2 + full LS) → Phase 3 tinh chỉnh (200× R&R). Mỗi pha thu hẹp không gian tìm kiếm nhưng tăng chất lượng.
+**Giải thích workflow:**
+- **Phase 1** chạy nhanh 8 heuristic khác nhau để tạo 8 cấu trúc route đa dạng — mỗi heuristic tối ưu cho một khía cạnh khác nhau (distance, time window, demand, etc.).
+- **Phase 2** chọn 2 ứng viên tốt nhất và áp dụng bộ local search đầy đủ — đầu tư tính toán vào lời giải có tiềm năng nhất.
+- **Phase 3** "đánh bóng" lần cuối bằng 200 vòng Ruin-and-Recreate trên kết quả tốt nhất.
+- **Perturbation** tạo biến thể lân cận để SSO có nhiều điểm khởi đầu trong vùng tốt.
+- **Smart Route Merging** thử giảm số xe khi xe còn dư tải trọng nhiều.
 
 ---
 
@@ -239,36 +206,13 @@ flowchart TD
     style SEL fill:#FF5722,color:#fff
 ```
 
-**Giải thích workflow chi tiết:**
-
-**Bước 1 — Non-dominated Sorting (NDS):** Toàn bộ quần thể $N$ lời giải được phân chia thành các front theo quan hệ Pareto dominance. Sử dụng NumPy broadcasting để tạo ma trận dominance $N \times N$ trong $O(MN^2)$ — với $M=3$, $N=100$ chỉ cần ~30K phép so sánh. Front $F_0$ (rank-0) chứa các lời giải **non-dominated** — không bị ai tốt hơn ở tất cả mục tiêu. Front $F_1$ chứa các lời giải chỉ bị $F_0$ dominate, v.v. Vai trò: phân tầng chất lượng để selection ưu tiên lời giải rank thấp.
-
-**Bước 2 — Crowding Distance (CD):** Trong mỗi front, CD đo **mật độ lân cận** của mỗi lời giải. Với mỗi mục tiêu $m$, sắp xếp lời giải trong front theo $f_m$, tính khoảng cách giữa 2 láng giềng, chuẩn hóa bởi range. Lời giải ở biên có $CD = \infty$ (luôn giữ). Lời giải ở vùng thưa có CD lớn → được ưu tiên → **duy trì đa dạng** trên Pareto front. Kết hợp rank + CD tạo thành tiêu chí so sánh hoàn chỉnh (tương tự NSGA-II).
-
-**Bước 3 — gBest Selection:** Từ front $F_0$, chọn 1 lời giải "lãnh đạo" bằng binary tournament:
-- So sánh ưu tiên 1: lời giải có **ít xe hơn** thắng (vì giảm 1 xe = tiết kiệm chi phí cố định lớn).
-- So sánh ưu tiên 2 (có preference): lời giải có **ASF nhỏ hơn** thắng — tức gần $g$ hơn theo trọng số $w$.
-- So sánh ưu tiên 2 (không preference): lời giải có **CD lớn hơn** thắng — ưu tiên vùng thưa.
-gBest đóng vai trò "kim chỉ nam" — SSO copy 95% keys từ gBest, nên chọn gBest tốt = hướng toàn bộ quần thể về phía vùng tối ưu theo preference.
-
-**Bước 4 — Tạo Offspring (2 đường song song):** Mỗi cá thể $i$ trong quần thể được cập nhật bằng 1 trong 2 cơ chế:
-
-- **Đường SSO (80%, khi $\text{rand}() \geq p_{\text{abs}}$):** Hoạt động ở mức **random-key vector** (không gian liên tục). Mỗi key $x_{i,j}$ được cập nhật: 95% copy từ gBest (exploitation mạnh), 4% giữ nguyên (bảo toàn), 1% random $\mathcal{U}(0,1)$ (exploration). Sau SSO, nếu thuật toán đang trì trệ (stagnation $> 3$ thế hệ) VÀ $\text{rand}() < p_m$, áp dụng **Polynomial Mutation** ($\eta_m = 20$) — thêm nhiễu nhỏ để phá vỡ sự đồng nhất. Keys mới được **decode** thành routes (argsort → phân cách → route) và qua **feasibility repair** (loại khách hàng vi phạm).
-
-- **Đường ABS (20%, khi $\text{rand}() < p_{\text{abs}}$):** Hoạt động ở mức **route** (không gian rời rạc). Decode lời giải cha thành routes, phá hủy 15–40% khách hàng (worst removal hoặc route removal), rồi xây lại route mới bằng composite score có preference. Kết quả được **reverse encode** ngược về random-key vector. ABS bổ sung cho SSO: SSO "dịch chuyển nhẹ" trong không gian liên tục, còn ABS "tái cấu trúc mạnh" ở mức route.
-
-- Cả hai đường đều đi qua **Pipeline Local Search** (2-opt → Or-opt → Relocate → Swap → Cross-Exchange) để cải thiện thêm, sau đó **đánh giá** 3 mục tiêu $f_1, f_2, f_3$.
-
-**Bước 5 — Cập nhật Archive:** Offspring non-dominated được thêm vào archive. ε-Dominance chia không gian mục tiêu thành grid $\varepsilon = 0.001$ — mỗi ô chỉ giữ 1 lời giải (lời giải có ASF nhỏ nhất). Nếu archive vượt 200, loại lời giải có ASF lớn nhất. Archive hoạt động như **bộ nhớ dài hạn** — lưu giữ non-dominated solutions tốt nhất qua mọi thế hệ, ngay cả khi chúng bị loại khỏi quần thể.
-
-**Bước 6 — Archive Injection:** 1 lời giải ngẫu nhiên từ archive được thêm vào offspring trước selection. Mục đích: (a) **elitism** — đảm bảo lời giải tốt không bị mất hoàn toàn; (b) **diversity injection** — đưa thông tin từ các thế hệ trước vào, tránh quần thể bị "quên" lời giải cũ hay.
-
-**Bước 7 — (μ+λ) Selection:** Gộp quần thể cha ($N$) + offspring ($N$) + 1 archive injection = $2N+1$ lời giải. Chọn $N$ tốt nhất theo thứ tự ưu tiên: (1) ít xe → (2) unique (không trùng lặp) → (3) rank thấp → (4) CD cao. Ưu tiên "ít xe" đầu tiên là thiết kế đặc thù cho VRPTW — trong Solomon benchmark, số xe tối ưu đã biết, lời giải ít xe hơn "cơ bản tốt hơn" bất kể distance. Loại trùng lặp (mục tiêu chênh $< 10^{-6}$) để duy trì đa dạng.
-
-**Bước 8 — Adaptive Control:** Kiểm tra $|\text{ASF}_{\text{best}}^{(t)} - \text{ASF}_{\text{best}}^{(t-1)}| < 10^{-6}$ liên tiếp $\geq 5$ thế hệ? Nếu có → trì trệ → tăng $p_{\text{abs}}$ (nhiều ABS hơn) và $p_m$ (nhiều mutation hơn) → kích hoạt exploration mạnh. Nếu không → giữ tham số bình thường → exploitation ổn định.
-
-> [!IMPORTANT]
-> Hai đường SSO và ABS là **thiết kế hybrid core** của iNSSSO. SSO mạnh về exploration toàn cục (dịch chuyển trong không gian liên tục), ABS mạnh về exploitation cục bộ (tái cấu trúc route có hướng dẫn preference). Tỷ lệ 80/20 là kết quả thực nghiệm — quá nhiều ABS làm chậm (vì ABS có $O(n^2)$), quá ít ABS làm yếu khả năng thoát local optima.
+**Giải thích workflow:**
+- Mỗi thế hệ bắt đầu bằng **ranking** (non-dominated sorting + crowding distance) để đánh giá quần thể hiện tại.
+- **gBest** được chọn từ Pareto front (rank-0) bằng binary tournament kết hợp ASF — đây là "kim chỉ nam" hướng dẫn SSO.
+- Mỗi cá thể được cập nhật bằng **SSO** (80%) hoặc **ABS** (20%) — SSO hoạt động ở mức keys liên tục, ABS ở mức route rời rạc.
+- **Polynomial mutation** chỉ kích hoạt khi phát hiện trì trệ — tránh phá hủy lời giải tốt khi đang hội tụ.
+- Sau khi tạo offspring, **Archive** được cập nhật, 1 lời giải được inject ngược lại, và **(μ+λ) selection** chọn N cá thể tốt nhất.
+- **Adaptive control** điều chỉnh tham số dựa trên tình trạng hội tụ.
 
 ---
 
@@ -311,32 +255,10 @@ flowchart TD
     style ROUL fill:#00BCD4,color:#fff
 ```
 
-**Giải thích workflow chi tiết:**
-
-**Pha 1 — Chọn chiến lược phá hủy (Destruction):** ABS chọn ngẫu nhiên giữa 2 chiến lược, với xác suất thiên về Route Removal (60%) vì khả năng giảm số xe cao hơn:
-
-- **Worst Removal (40%):** Tính $\text{saving}(c_i) = d_{\text{prev},c_i} + d_{c_i,\text{next}} - d_{\text{prev},\text{next}}$ cho mỗi khách hàng — saving lớn = khách hàng "lạc lõng" so với route, loại bỏ sẽ tiết kiệm khoảng cách nhiều nhất. Sắp xếp theo saving giảm dần, loại 15–35% khách hàng (tỷ lệ random trong khoảng). Chiến lược này **targeted** — chỉ loại khách hàng gây tốn chi phí, giữ lại "khung sườn" tốt của route.
-
-- **Route Removal (60%):** Loại $\lfloor |\text{routes}| / 3 \rfloor$ route, xác suất chọn $P(k) \propto \exp(-10 \cdot n_k / n_{\max})$ — route ngắn (ít khách hàng) bị chọn gần như chắc chắn (hệ số $-10$ rất lớn). Chiến lược này **structural** — phá hủy cấu trúc route, tạo cơ hội "xóa bỏ" route thừa. Ví dụ: route chỉ có 1–2 khách hàng thường là kết quả của split không tối ưu — loại bỏ để phân lại vào route khác giúp giảm tổng số xe.
-
-**Pha 2 — Tái tạo (Reconstruction):** Từ tập khách hàng chưa phân công, ABS xây route mới theo phương pháp lấy cảm hứng từ A* search:
-
-1. **Tạo route mới** từ depot (thời gian = 0, tải = 0).
-2. **Với mỗi khách hàng ứng viên**, tính 3 thành phần:
-   - $\hat{d}(c_i)$: khoảng cách chuẩn hóa từ vị trí hiện tại đến $c_i$ → liên quan trực tiếp đến $f_1$ (distance)
-   - $\hat{\text{tw}}(c_i)$: mức "gấp" của time window — TW hẹp (deadline sớm) → ưu tiên cao → liên quan đến $f_2$ (waiting)
-   - $\hat{h}(c_i)$: **heuristic A*** — đếm số khách hàng vẫn có thể phục vụ SAU KHI chọn $c_i$. Giá trị $h$ cao = "chọn $c_i$ không gây bế tắc" → liên quan đến $f_3$ (balance), vì route "mở" hơn → phân bổ đều hơn.
-3. **Composite score:** $f(c_i) = w_1 \cdot \hat{d} + w_2 \cdot \hat{\text{tw}} + (1-w_1-w_2) \cdot \hat{h}$ — trọng số $w$ lấy trực tiếp từ preference của DM. Nếu DM muốn distance quan trọng nhất ($w_1 = 0.5$), route sẽ ưu tiên chọn khách gần. Nếu DM muốn cân bằng ($w_3$ cao), route sẽ ưu tiên giữ reachability cao.
-4. **calVcost (feasibility check):** Trước khi tính score, kiểm tra 3 ràng buộc cứng: (a) tải $\leq Q$, (b) thời gian bắt đầu $\leq l_i$, (c) quay về depot đúng giờ. Nếu vi phạm bất kỳ → loại khỏi ứng viên (score = $\infty$).
-5. **Roulette-Wheel Selection:** Đảo score (thấp → xác suất cao), chọn khách hàng theo bánh xe quay. Tại sao không tham lam (chọn score thấp nhất)? Vì mỗi lần chạy ABS cần cho kết quả **khác nhau** — nếu tham lam, cùng input sẽ cho cùng output → không tăng đa dạng. Roulette thêm ngẫu nhiên có kiểm soát — khách hàng score thấp vẫn có xác suất cao nhất, nhưng khách score cao vẫn có cơ hội.
-6. Khi route hiện tại đầy (không còn ứng viên khả thi), tạo route mới và lặp lại.
-
-**Pha 3 — Post-processing:** Xử lý 2 vấn đề:
-- **Regret-2 Insertion:** Cho khách hàng chưa phân được (do không route nào khả thi khi xây), tìm vị trí chèn tốt nhất (cost₁) và tốt nhì (cost₂) trên tất cả route. Khách có regret = cost₂ − cost₁ lớn nhất → chèn trước (vì nếu chờ, vị trí tốt duy nhất sẽ bị "chiếm"). Đây là chiến lược "cấp bách": khách hàng có 1 cơ hội duy nhất nên được ưu tiên.
-- **Quick 2-opt:** Duyệt 1 lần (single pass) qua mỗi route, đảo đoạn con nếu cải thiện. Chỉ 1 pass (không lặp đến hội tụ) vì ABS cần nhanh — LS nặng sẽ được thực hiện ở Pipeline LS sau đó.
-
-> [!NOTE]
-> ABS là thành phần **mang tính preference mạnh nhất** trong iNSSSO — trọng số preference $w$ trực tiếp quyết định cách chọn khách hàng khi xây route. SSO chỉ hướng về gBest (gián tiếp), nhưng ABS hướng về preference ở **từng bước xây route** (trực tiếp).
+**Giải thích workflow:**
+- **Pha Phá hủy:** Chọn ngẫu nhiên giữa Worst Removal (loại khách hàng "lạc lõng") và Route Removal (loại route ngắn) — tạo tập khách hàng cần phân công lại.
+- **Pha Tái tạo:** Xây route mới từng khách hàng một, sử dụng **composite score** kết hợp 3 yếu tố (distance, TW urgency, reachability) với trọng số từ preference. Roulette-wheel selection thêm tính ngẫu nhiên.
+- **Post-processing:** Regret-2 insertion xử lý khách hàng còn sót, quick 2-opt "gọt" route lần cuối.
 
 ---
 
@@ -369,35 +291,10 @@ flowchart LR
     style INTER fill:#FF5722,color:#fff
 ```
 
-**Giải thích workflow chi tiết:**
-
-Pipeline LS được thiết kế theo nguyên tắc **"từ nhẹ đến nặng"** — operator rẻ chạy trước (để đạt cải thiện nhanh), operator đắt chạy sau (chỉ khi cần thiết).
-
-**Giai đoạn 1 — Intra-Route (tối ưu bên trong route):**
-
-- **2-opt:** Duyệt tất cả cặp $(i, j)$ trong route. Với mỗi cặp, thử đảo ngược đoạn $[i+1, j]$ — nếu $d(r_i, r_j) + d(r_{i+1}, r_{j+1}) < d(r_i, r_{i+1}) + d(r_j, r_{j+1})$ → chấp nhận đảo. Trực quan: khi 2 cạnh "giao nhau" (crossing), đảo đoạn sẽ "gỡ" chúng → giảm khoảng cách. Dùng **first-improvement**: chấp nhận cải thiện đầu tiên tìm được, không tìm tốt nhất → nhanh hơn. Lặp cho đến khi không còn cải thiện ($O(n^2)$ mỗi vòng, thường 2–5 vòng).
-
-- **Or-opt:** Di chuyển đoạn 1, 2, hoặc 3 khách hàng liên tiếp sang vị trí khác trong cùng route. Mạnh hơn 2-opt vì: (a) không bị ràng buộc "đảo ngược" — chỉ cắt-dán; (b) di chuyển đoạn liên tiếp giữ nguyên thứ tự nội bộ — phù hợp khi thứ tự đã tốt nhưng vị trí chèn chưa tối ưu. Or-opt đặc biệt hiệu quả khi 1–2 khách hàng bị "kẹt" giữa 2 cụm không phù hợp.
-
-**Giai đoạn 2 — Inter-Route (tối ưu giữa các route):**
-
-- **Relocate:** Thử chuyển từng khách hàng $c$ từ route $A$ sang mỗi vị trí khả thi trong route $B$. Nếu tổng quãng đường giảm VÀ ràng buộc thỏa mãn → chấp nhận. Relocate đặc biệt hiệu quả trong 2 trường hợp: (a) khách hàng ở rìa route A nhưng gần tâm route B → chuyển sang B cải thiện cả 2 route; (b) route A chỉ còn 1–2 khách → relocate hết → **loại bỏ route A** → giảm 1 xe.
-
-- **Swap:** Đổi 1 khách hàng giữa 2 route — khác Relocate ở chỗ cả 2 route đều "nhận" và "cho", nên ít gây ra vi phạm tải trọng (vì tải ít thay đổi). Swap cải thiện **clustering** — khách hàng được chuyển về route có cụm phù hợp hơn.
-
-- **Cross-Exchange:** Hoán đổi phần đuôi (suffix) của 2 route — tái cấu trúc mạnh nhất trong 3 operator. Ví dụ: route A = [depot, 1, 2, **3, 4**, depot] và route B = [depot, 5, 6, **7, 8**, depot] → hoán đổi đuôi → route A = [depot, 1, 2, 7, 8, depot], route B = [depot, 5, 6, 3, 4, depot]. Cross-Exchange có thể tạo ra thay đổi lớn — 2 route bị "trộn" phần cuối → cơ hội lớn để cải thiện nhưng cũng dễ vi phạm ràng buộc.
-
-**Giai đoạn 3 — Ruin-and-Recreate (tùy chọn):**
-
-Khi 3 operator trên không tìm được cải thiện nữa (local optima), R&R "phá vỡ" cấu trúc:
-1. **Destroy:** Loại ngẫu nhiên 15–40% khách hàng khỏi route hiện tại
-2. **Recreate:** Chèn lại theo thứ tự deadline (khách hàng gấp trước) → cấu trúc route mới, có thể thoát khỏi vùng local optima
-3. **Iterate:** Lặp 50–200 lần, mỗi lần phá hủy-xây lại khác nhau (do ngẫu nhiên), giữ kết quả tốt nhất
-
-R&R giống nguyên tắc simulated annealing — chấp nhận "phá hủy tạm thời" để tìm kiếm cấu trúc mới tốt hơn. Trong thực nghiệm, R&R cải thiện 2–5% quãng đường so với chỉ dùng 2-opt + inter-route operators.
-
-> [!TIP]
-> Thứ tự pipeline (2-opt → Or-opt → Relocate → Swap → Cross-Exchange → R&R) không tùy ý: operator **rẻ + hiệu quả cao** chạy trước để "vét" cải thiện dễ, operator **đắt + tái cấu trúc lớn** chạy sau chỉ khi còn dư ngân sách thời gian. Thiết kế này tối đa hóa improvement/thời gian.
+**Giải thích workflow:**
+- **Intra-route** (trong 1 route): 2-opt gỡ các cạnh giao nhau, Or-opt dịch chuyển đoạn khách hàng → tối ưu thứ tự phục vụ cục bộ.
+- **Inter-route** (giữa các route): Relocate/Swap/Cross-Exchange tái phân bổ khách hàng giữa route → cải thiện clustering và cân bằng tải.
+- **Ruin-and-Recreate** (tùy chọn): Phá hủy 15–40% → xây lại từ đầu → thoát local optima khi các operator nhỏ không còn hiệu quả.
 
 ---
 
@@ -432,32 +329,11 @@ flowchart TD
     style NORMAL fill:#4CAF50,color:#fff
 ```
 
-**Giải thích workflow chi tiết:**
-
-**Giám sát — ASF best tracking:** Mỗi thế hệ $t$, hệ thống ghi nhận $\text{ASF}_{\text{best}}^{(t)} = \min_{x \in \text{population}} \text{ASF}(x, g, w)$ — giá trị ASF nhỏ nhất trong quần thể hiện tại. ASF được chọn làm metric giám sát (thay vì HV hay IGD) vì: (a) ASF tính nhanh $O(N \cdot M)$, (b) ASF trực tiếp đo "gần preference bao nhiêu" — đúng mục tiêu của preference-based optimization, (c) ASF không cần true Pareto front (IGD cần).
-
-**Phát hiện trì trệ — Stagnation Detection:**
-- So sánh $|\text{ASF}_{\text{best}}^{(t)} - \text{ASF}_{\text{best}}^{(t-1)}|$ với threshold $\epsilon_{\text{stag}} = 10^{-6}$.
-- Nếu $\geq \epsilon_{\text{stag}}$ (có cải thiện): reset `stag_counter = 0`. Thuật toán đang hội tụ bình thường → giữ tham số ở mức **exploitation** ($p_{\text{abs}} = 0.20$, $p_m = 0.05$) để không phá vỡ quá trình hội tụ tốt.
-- Nếu $< \epsilon_{\text{stag}}$ (không cải thiện): tăng `stag_counter += 1`. Đây là dấu hiệu quần thể đang bị **kẹt tại local optima** hoặc đã **hội tụ sớm** (premature convergence).
-- Threshold 5 thế hệ liên tiếp đảm bảo: (a) không phản ứng quá sớm với "dao động bình thường" (1–2 thế hệ không cải thiện là chuyện thường); (b) phát hiện kịp thời khi thực sự bị kẹt.
-
-**Phản ứng khi trì trệ — Cơ chế thích ứng kép:**
-
-1. **Tăng $p_{\text{abs}}$:** $p_{\text{abs}} = \min(0.50, 0.20 + 0.05 \times \text{stag\_counter})$. Tác dụng: tỷ lệ ABS tăng từ 20% lên tới 50% → nhiều lời giải được cập nhật bằng ABS (phá hủy-tái tạo) thay vì SSO (copy gBest). Lý do: nếu copy gBest liên tục mà không cải thiện → gBest có thể đã ở local optima → cần **phá cấu trúc** bằng ABS để thoát. Giới hạn 50% vì ABS đắt ($O(n^2)$), quá nhiều ABS làm chậm thuật toán.
-
-2. **Tăng $p_m$:** $p_m = 0.05 + 0.10 \times \text{progress}$, trong đó $\text{progress} = t / t_{\text{max}} \in [0, 1]$. Tác dụng: xác suất mutation tăng dần theo thời gian (5% → 15%). Lý do: giai đoạn đầu ($\text{progress} \approx 0$) → quần thể còn đa dạng, mutation ít để exploitation tốt; giai đoạn cuối ($\text{progress} \approx 1$) → quần thể đã hội tụ, mutation nhiều để "lung lay" cấu trúc, hy vọng tìm được vùng mới. Đây là chiến lược **progressive diversification** — tương tự cooling schedule trong simulated annealing nhưng ngược chiều.
-
-**Tổng hợp hiệu ứng:**
-
-| Trạng thái | $p_{\text{abs}}$ | $p_m$ | Đặc tính |
-|------------|------------------|-------|----------|
-| Đang hội tụ tốt | 0.20 (20% ABS) | 0.05 (5% mutation) | Exploitation mạnh — khai thác vùng tốt |
-| Trì trệ nhẹ (stag=5) | 0.45 (45% ABS) | ~0.10 | Cân bằng — tăng phá-xây, tăng biến thể |
-| Trì trệ nặng (stag=6+) | 0.50 (50% ABS) | ~0.12–0.15 | Exploration mạnh — phá cấu trúc triệt để |
-
-> [!IMPORTANT]
-> Adaptive Control tạo ra vòng phản hồi âm (negative feedback loop): trì trệ → tăng exploration → phá cấu trúc → tìm vùng mới → cải thiện ASF → giảm exploration → quay lại exploitation. Nhờ đó thuật toán **tự cân bằng** mà không cần DM can thiệp — một đặc trưng quan trọng cho hệ thống tự động trong logistics thực tế.
+**Giải thích workflow:**
+- Mỗi thế hệ, hệ thống so sánh $\text{ASF}_{\text{best}}$ hiện tại với thế hệ trước.
+- Nếu cải thiện (chênh lệch $\geq 10^{-6}$): reset counter, giữ tham số bình thường → exploitation.
+- Nếu trì trệ liên tiếp $\geq 5$ thế hệ: kích hoạt đa dạng hóa bằng cách tăng $p_{\text{abs}}$ (nhiều ABS phá-xây hơn) và $p_m$ (nhiều mutation hơn).
+- Cơ chế này đảm bảo thuật toán **tự cân bằng** giữa exploitation (khi đang tốt) và exploration (khi bị kẹt).
 
 ---
 
@@ -996,9 +872,6 @@ x \in \text{ROI} \text{ và } y \notin \text{ROI}, \text{ HOẶC} \\
 
 ## 12. Metrics Đánh giá
 
-Để đánh giá chất lượng thuật toán đa mục tiêu có preference, cần nhiều metric bổ sung nhau — mỗi metric đo một khía cạnh khác nhau. Phần này trình bày chi tiết 7 metric được sử dụng, chia thành 3 nhóm: **metrics Pareto truyền thống** (đánh giá chung), **metrics Preference-specific** (đánh giá khả năng hướng về vùng DM quan tâm), và **metric bổ trợ**.
-
-
 | Metric | Công thức | Ý nghĩa chi tiết |
 |--------|-----------|-------------------|
 | **Cov** | $\frac{|\{v \in P^* : \exists v'\preceq v\}|}{|P^*|}$ | Bao nhiêu % PF thật bị PF tìm được dominate → đo **convergence** |
@@ -1008,145 +881,6 @@ x \in \text{ROI} \text{ và } y \notin \text{ROI}, \text{ HOẶC} \\
 | **Best ASF** | $\min \text{ASF}(x)$ | Lời giải **gần $g$ nhất** → đo preference satisfaction |
 | **ROI Count** | Số lời giải trong ROI | Bao nhiêu lời giải nằm trong vùng DM quan tâm |
 | **Nnds** | Kích thước front-0 | Số lời giải non-dominated → đo **cardinality** của PF |
-
----
-
-### 12.1. Coverage (Cov) — Đo convergence thuần túy
-
-$$\text{Cov}(A, P^*) = \frac{|\{v \in P^* : \exists v' \in A, \; v' \preceq v\}|}{|P^*|}$$
-
-trong đó $A$ = Pareto front tìm được, $P^*$ = true Pareto front (đã biết từ BKS — Best Known Solutions), $v' \preceq v$ nghĩa là $v'$ **dominate** $v$.
-
-**Ý nghĩa trực quan:** Cov đếm **bao nhiêu phần trăm** lời giải thật ($P^*$) bị lời giải thuật toán ($A$) "phủ" (dominate hoặc bằng). Cov = 1.0 nghĩa là mọi lời giải trong $P^*$ đều bị $A$ dominate → thuật toán đã tìm được tất cả vùng tối ưu hoặc tốt hơn. Cov = 0.0 nghĩa là $A$ không dominate được bất kỳ lời giải nào trong $P^*$ → thuật toán hoàn toàn chưa hội tụ.
-
-**Điểm mạnh:**
-- Trực quan, dễ diễn giải — "thuật toán phủ được X% Pareto front thật"
-- Phản ánh trực tiếp khả năng **hội tụ** (convergence) — lời giải tìm được có tốt bằng hoặc hơn benchmark không?
-
-**Điểm yếu:**
-- **Không đo diversity:** Một thuật toán có thể đạt Cov = 0.8 nhưng tất cả lời giải tập trung ở 1 góc PF → coverage cao nhưng spread kém.
-- **Cần true PF ($P^*$):** Với bài toán mới chưa có BKS, không tính được Cov. Trong thực nghiệm Solomon, $P^*$ được lấy từ tổng hợp các nghiên cứu tốt nhất.
-- **Nhạy cảm với kích thước $P^*$:** $P^*$ lớn → Cov thường thấp hơn (khó phủ hết).
-
-### 12.2. Inverted Generational Distance (IGD) — Đo convergence + diversity
-
-$$\text{IGD}(A, P^*) = \frac{1}{|P^*|} \sum_{v \in P^*} \min_{v' \in A} \|v - v'\|_2$$
-
-**Ý nghĩa trực quan:** IGD tính **khoảng cách trung bình** từ mỗi lời giải thật ($P^*$) đến lời giải gần nhất trong $A$. IGD nhỏ → $A$ "nằm sát" $P^*$ cả về vị trí lẫn phân bố.
-
-**Tại sao IGD tốt hơn GD?** GD (Generational Distance) tính ngược: từ $A$ đến $P^*$. GD nhỏ chỉ đảm bảo $A$ gần $P^*$, **nhưng** $A$ có thể chỉ tập trung ở 1 vùng → GD vẫn nhỏ mà diversity kém. IGD khắc phục bằng cách tính từ $P^*$ — nếu có vùng nào trong $P^*$ mà $A$ thiếu lời giải, khoảng cách từ vùng đó sẽ lớn → IGD tăng.
-
-**Ví dụ minh họa:** Giả sử $P^* = \{(1,5), (3,3), (5,1)\}$:
-- Thuật toán A tìm được $\{(1.1, 5.1), (3.1, 3.1), (5.1, 1.1)\}$ → IGD ≈ 0.14 (gần đều $P^*$)
-- Thuật toán B tìm được $\{(1.0, 5.0), (1.2, 4.8)\}$ → IGD ≈ 2.5 (chỉ phủ 1 góc, thiếu 2 vùng)
-
-**Điểm mạnh:** Đo **cả convergence lẫn diversity** trong 1 con số duy nhất — metric "2 trong 1".
-
-**Điểm yếu:**
-- Cần $P^*$ (giống Cov)
-- Nhạy cảm với phân bố $P^*$ — nếu $P^*$ không đều, IGD bị thiên lệch về vùng $P^*$ dày
-- **Không phân biệt lời giải trong/ngoài ROI** — với preference-based optimization, ta chỉ quan tâm vùng quanh $g$, nhưng IGD đánh giá toàn bộ PF
-
-### 12.3. Hypervolume (HV) — Metric "vàng" trong MO
-
-$$\text{HV}(A, r) = \text{Vol}\left(\bigcup_{v \in A} \prod_{i=1}^{M} [v_i, r_i]\right)$$
-
-trong đó $r = [r_1, r_2, r_3]$ là **reference point** (thường lấy nadir + margin), $\text{Vol}$ = thể tích M-chiều.
-
-**Ý nghĩa hình học (3D):** Với 3 mục tiêu, HV là **thể tích** trong không gian 3D bị "phủ" bởi các lời giải trong $A$. Mỗi lời giải $v$ tạo ra một "hộp" từ $v$ đến $r$. HV = tổng thể tích hợp (union) của tất cả hộp.
-
-**Tại sao HV là metric "vàng"?**
-1. **Không cần $P^*$:** Chỉ cần reference point $r$ (dễ đặt)
-2. **Đo 3 thứ cùng lúc:** Convergence (lời giải gần gốc → hộp lớn → HV lớn), Diversity (nhiều lời giải → nhiều hộp → HV lớn), Spread (lời giải rải rộng → hộp ít trùng → HV lớn)
-3. **Pareto-compliant:** Nếu $A$ dominate $B$ → HV($A$) > HV($B$) — duy nhất giữa các metric phổ biến có tính chất này
-
-**Chuẩn hóa:** Trước khi tính HV, chuẩn hóa mỗi mục tiêu về $[0, 1]$: $\hat{f}_i = \frac{f_i - \text{ideal}_i}{\text{nadir}_i - \text{ideal}_i}$. Reference point $r = [1.1, 1.1, 1.1]$ (10% ngoài nadir). Chuẩn hóa đảm bảo HV không bị chi phối bởi mục tiêu có scale lớn (ví dụ distance ~800 vs waiting ~0.5).
-
-**Điểm yếu:**
-- **Tính toán đắt:** $O(n^{M-1} \log n)$ với $M$ mục tiêu. Với $M=3$, vẫn chấp nhận được.
-- **Nhạy cảm với reference point:** $r$ khác → HV khác → phải cố định $r$ khi so sánh thuật toán.
-- **Giống IGD, không phân biệt vùng preference** — HV phần thưởng đều cho mọi vùng PF.
-
-### 12.4. R-HV (Restricted Hypervolume) — HV trong vùng Preference
-
-$$\text{R-HV}(A, r, \text{ROI}) = \text{HV}(\{v \in A : v \in \text{ROI}\}, r)$$
-
-**Ý nghĩa:** R-HV chỉ tính HV cho những lời giải **nằm trong ROI** (Region of Interest). Đây là metric đặc trưng cho preference-based optimization.
-
-**Tại sao cần R-HV?** HV truyền thống đánh giá **toàn bộ PF** — nhưng DM chỉ quan tâm vùng quanh $g$. Một thuật toán có HV cao (PF rộng, đẹp) nhưng ít lời giải gần $g$ → thực tế vô dụng cho DM. R-HV khắc phục: chỉ "thưởng" cho lời giải DM thực sự muốn.
-
-**So sánh HV vs R-HV:**
-
-| Tình huống | HV | R-HV | Diễn giải |
-|------------|-----|------|-----------|
-| PF rộng nhưng xa $g$ | Cao | Thấp | Thuật toán tốt về Pareto nhưng kém về preference |
-| PF hẹp nhưng sát $g$ | Trung bình | Cao | Thuật toán tập trung đúng vùng DM muốn |
-| PF rộng VÀ phủ $g$ | Cao | Cao | Lý tưởng — cả diversity lẫn preference |
-
-**Ý nghĩa trong iNSSSO:** R-HV là metric quan trọng nhất để đánh giá hiệu quả của preference guidance (ASF-based gBest, ABS composite score, ROI-based archive pruning). R-HV cao chứng minh thuật toán thực sự **hướng tìm kiếm về phía DM muốn**, không chỉ tìm PF chung chung.
-
-### 12.5. Best ASF — Đo Preference Satisfaction
-
-$$\text{Best ASF} = \min_{x \in A} \text{ASF}(x, g, w) = \min_{x \in A} \max_{i=1}^{3} \left\{ w_i \cdot (f_i(x) - g_i) \right\}$$
-
-**Ý nghĩa:** Best ASF đo lời giải **gần điểm tham chiếu $g$ nhất** theo metric có trọng số. Best ASF = 0 nghĩa là tồn tại lời giải khớp chính xác $g$. Best ASF < 0 nghĩa là tồn tại lời giải **tốt hơn** $g$ ở tất cả mục tiêu (rất tốt). Best ASF > 0 nghĩa là lời giải tốt nhất vẫn "tệ hơn" $g$ ở ít nhất 1 mục tiêu.
-
-**Ví dụ cụ thể:** Với $g = [830, 0.5, 0.15]$, $w = [0.5, 0.3, 0.2]$:
-- Lời giải $(828, 0.45, 0.14)$ → ASF = $\max(-1.0, -0.015, -0.002)$ = $-0.002$ → **tốt hơn $g$** ở mọi mục tiêu
-- Lời giải $(835, 0.48, 0.13)$ → ASF = $\max(2.5, -0.006, -0.004)$ = $2.5$ → distance vượt $g$, bị phạt nặng vì $w_1$ cao
-
-**Vai trò trong thuật toán:**
-- **Giám sát hội tụ:** Log Best ASF mỗi thế hệ → biểu đồ convergence curve
-- **Phát hiện trì trệ:** Nếu Best ASF không giảm liên tiếp 5 thế hệ → stagnation → kích hoạt adaptive control
-- **Chọn lời giải cuối:** Khi DM cần 1 lời giải duy nhất, chọn lời giải có Best ASF nhỏ nhất
-
-**Điểm mạnh:** Tính nhanh ($O(N \cdot M)$), không cần $P^*$, trực tiếp đo "DM hài lòng bao nhiêu".
-
-**Điểm yếu:** Chỉ đánh giá **1 lời giải tốt nhất**, không phản ánh chất lượng toàn bộ PF.
-
-### 12.6. ROI Count — Đo mật độ vùng Preference
-
-$$\text{ROI Count} = |\{x \in A : x \in \text{ROI}\}|$$
-
-trong đó ROI (Region of Interest) được xác định bởi:
-
-$$\sum_{i=1}^{3} \left( \frac{w_i \cdot (f_i(x) - g_i)}{\delta \cdot (\text{nadir}_i - \text{ideal}_i)} \right)^2 \leq 1$$
-
-**Ý nghĩa:** ROI Count đếm **bao nhiêu lời giải** nằm trong vùng elip quanh $g$. ROI Count cao → thuật toán tạo ra **nhiều lựa chọn** cho DM trong vùng đáng quan tâm.
-
-**Tại sao quan trọng?** Best ASF chỉ đo 1 lời giải tốt nhất, nhưng DM thường muốn **nhiều lựa chọn** để cân nhắc trade-off. Ví dụ: DM muốn "khoảng 10 lời giải quanh mức 830 km" để so sánh, không chỉ 1 lời giải duy nhất tốt nhất. ROI Count cao (ví dụ 15–20) nghĩa là DM có nhiều phương án thay thế gần preference.
-
-**Liên hệ với $\delta$:** $\delta$ nhỏ (0.05) → ROI hẹp → ROI Count thường thấp (chỉ 2–5) nhưng lời giải rất sát $g$. $\delta$ lớn (0.20) → ROI rộng → ROI Count cao (15–30) nhưng lời giải phân tán hơn. Trong thực nghiệm, $\delta = 0.10$ cho cân bằng tốt.
-
-**Điểm yếu:** Chỉ đếm số lượng, không đo chất lượng hay phân bố bên trong ROI. Kết hợp với R-HV để đánh giá đầy đủ.
-
-### 12.7. Nnds — Kích thước Pareto Front
-
-$$\text{Nnds} = |F_0| = |\{x \in A : \nexists x' \in A, \; x' \prec x\}|$$
-
-**Ý nghĩa:** Nnds đếm số lời giải **non-dominated** (rank-0) trong tập kết quả. Nnds lớn → PF "phong phú" → DM có nhiều lời giải trade-off để chọn. Nnds = 1 → PF thoái hóa thành 1 điểm (tất cả hội tụ về 1 lời giải).
-
-**Khoảng giá trị hợp lý:** Với $N = 100$ (kích thước quần thể), Nnds thường từ 10–50. Nnds < 5 → quần thể quá đồng nhất (có thể do stagnation). Nnds > 80 → quá nhiều front-0 → selection pressure yếu (hầu hết lời giải rank-0 → không phân biệt tốt/xấu).
-
-**Điểm yếu:** Nnds không đo chất lượng. Một PF có 50 lời giải non-dominated nhưng tất cả đều xa optimal vẫn có Nnds = 50.
-
-### 12.8. Tổng hợp — Bảng So sánh Metrics
-
-| Metric | Cần $P^*$? | Đo Convergence | Đo Diversity | Đo Preference | Tốc độ |
-|--------|:----------:|:--------------:|:------------:|:-------------:|:------:|
-| **Cov** | ✅ | ✅✅ | ❌ | ❌ | Nhanh |
-| **IGD** | ✅ | ✅ | ✅ | ❌ | Nhanh |
-| **HV** | ❌ | ✅ | ✅ | ❌ | Trung bình |
-| **R-HV** | ❌ | ✅ | ✅ | ✅✅ | Trung bình |
-| **Best ASF** | ❌ | ✅ | ❌ | ✅✅ | Rất nhanh |
-| **ROI Count** | ❌ | ❌ | ✅ | ✅ | Rất nhanh |
-| **Nnds** | ❌ | ❌ | ✅ | ❌ | Rất nhanh |
-
-> [!IMPORTANT]
-> **Chiến lược đánh giá trong bài báo:** Sử dụng **IGD + HV** cho đánh giá Pareto truyền thống (so sánh với NSGA-II, MOEA/D), và **R-HV + Best ASF + ROI Count** cho đánh giá preference-specific (so sánh với R-NSGA-II, g-NSGA-II). Kết hợp 2 nhóm metric chứng minh iNSSSO **vừa tìm PF tốt vừa hướng đúng preference** — ưu thế kép so với thuật toán chỉ mạnh ở 1 mặt.
-
-> [!NOTE]
-> Tất cả metric đều được tính trên **30 lần chạy độc lập** (independent runs) và báo cáo trung bình ± độ lệch chuẩn. Kiểm định thống kê **Wilcoxon rank-sum test** ($\alpha = 0.05$) xác nhận sự khác biệt có ý nghĩa thống kê giữa các thuật toán.
 
 ---
 
