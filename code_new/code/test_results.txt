@@ -1,0 +1,47 @@
+=== STDOUT ===
+
+============================================================
+  Instance : C101
+  Customers: 100
+  Vehicles : 25
+  Capacity : 200
+  Time     : 30s
+  Ref Point: g = [830.0, 0.5, 0.15]
+  Weights  : w = [0.5, 0.3, 0.2]
+  ROI Delta: delta = 0.5
+============================================================
+
+
+============================================================
+  Results
+============================================================
+  Generations : 98
+  Runtime     : 30.1s
+  PF Size     : 5
+  HV          : 0.041309
+  Nnds        : 5
+  R-HV        : 0.157682
+  Best ASF    : 0.010802
+  ROI Count   : 4/5
+  Best Dist   : 828.94  (10 routes)
+  Best ASF Sol: f1=828.94  f2=0.0000  f3=0.204011  ASF=0.010802
+
+  Pareto Front objectives (f1, f2, f3):
+    [1] f1=828.94  f2=0.0000  f3=0.204011  routes=10  unserved=0  ASF=0.0108
+    [2] f1=838.76  f2=0.5146  f3=0.199048  routes=10  unserved=0  ASF=4.3821
+    [3] f1=880.48  f2=0.1722  f3=0.148239  routes=10  unserved=0  ASF=25.2396
+    [4] f1=862.84  f2=0.6124  f3=0.145969  routes=10  unserved=0  ASF=16.4184
+    [5] f1=856.05  f2=0.0000  f3=0.201815  routes=10  unserved=0  ASF=13.0233
+
+  Pareto plot saved to results/pareto_C101.png
+  Route plot saved to results/routes_C101.png
+  Convergence plot saved to results/convergence_C101.png
+============================================================
+
+
+=== STDERR ===
+16:22:14 [INFO] algorithm.inssso: iNSSSO starting on C101  (nSol=100, tRun=30s, nABS=0.20, g=[830.0, 0.5, 0.15], w=[0.5, 0.3, 0.2])
+16:22:20 [INFO] algorithm.inssso: Best init: 10 routes, dist=828.9
+16:22:51 [INFO] algorithm.inssso: iNSSSO finished: 98 gen, 30.1s, PF=5 (archive=5)
+
+=== RETURN CODE: 0 ===

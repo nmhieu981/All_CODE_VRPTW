@@ -1,0 +1,57 @@
+# ===================================================
+# iNSSSO Algorithm Configuration
+# ===================================================
+# Parameters from ANOVA optimal — Table 6
+
+algorithm:
+  n_sol: 100          # population size
+  cw: 0.99            # probability of keeping current value
+  cg: 0.95            # probability of using gbest
+  n_abs: 0.2          # ABS trigger probability
+  t_run: 60           # time limit per run (seconds)
+  archive_size: 200   # max external archive size
+  epsilon: 0.01       # ε-dominance tolerance
+  ls_rate_rank0: 0.15 # local search probability for rank-0 solutions
+  mutation_rate: 0.05 # polynomial mutation probability
+
+preference:
+  reference_point: [830.0, 0.5, 0.15]   # g: aspiration for f1, f2, f3
+  weights: [0.5, 0.3, 0.2]              # w: importance of f1, f2, f3
+  roi_delta: 0.5                         # ROI radius factor
+
+experiment:
+  n_runs: 15          # independent runs per instance
+  time_limit: 60      # seconds per run
+  n_sol: 200          # population size
+  data_format: csv    # csv or txt
+  data_dir: data/csv  # path to Solomon instances
+  results_dir: results
+
+comparison:
+  algorithms:
+    - iNSSSO
+    - NSSSO
+    - MOPSO
+    - NSGA-II
+    - MOEA/D
+    - SPEA2
+
+solomon:
+  groups:
+    - C1
+    - C2
+    - R1
+    - R2
+    - RC1
+    - RC2
+  n_customers: 100
+
+metrics:
+  reference_point: [1.1, 1.1, 1.1]  # HV reference after normalisation
+
+# ANOVA parameter tuning ranges (Section 5.2)
+tuning:
+  cw_values: [0.97, 0.99]
+  cg_values: [0.85, 0.90, 0.95]
+  n_abs_values: [0.0, 0.2, 0.4, 0.6]
+  n_replicates: 10

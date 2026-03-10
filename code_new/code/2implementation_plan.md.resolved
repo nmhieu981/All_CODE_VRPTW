@@ -1,0 +1,134 @@
+# Preference-Based Optimization Refactor — iNSSSO
+
+## Bối cảnh
+
+Chuyển toàn bộ logic chọn lọc lời giải từ "Cân bằng Pareto" sang "Dựa trên ưu tiên của người dùng" (Preference-based) bằng Reference Point **g**, Weight Vector **w**, R-Dominance ranking, ASF-based gBest, preference-aware ABS, và R-HV metric.
+
+---
+
+## Proposed Changes
+
+### 1. Preference Data Structure
+
+#### [NEW] [preference.py](file:///d:/LuanVanThs/code/core/preference.py)
+
+Cấu trúc dữ liệu trung tâm cho **g** (reference point) và **w** (weight vector):
+
+```python
+@dataclass
+class UserPreference:
+    g: np.ndarray          # [g1, g2, g3] — aspiration levels
+    w: np.ndarray          # [w1, w2, w3] — importance weights (sum=1)
+    delta: float = 0.1     # ROI radius factor (Region of Interest)
+
+    def asf(self, obj) -> float:
+        """Achievement Scalarizing Function: ASF(x,g,w) = max_i{w_i*(f_i-g_i)}"""
+
+    def weighted_distance(self, obj) -> float:
+        """Weighted L2 distance from g"""
+
+    def in_roi(self, obj, ideal, nadir) -> bool:
+        """Check if solution falls within Region of Interest"""
+```
+
+---
+
+### 2. R-Dominance Ranking
+
+#### [NEW] [r_dominance.py](file:///d:/LuanVanThs/code/algorithm/r_dominance.py)
+
+Thay thế [fast_nondominated_sort](file:///d:/LuanVanThs/code/algorithm/nondominated.py#38-87) trong main loop bằng R-Dominance sort:
+
+**R-Dominance**: Lời giải **x** R-dominate **y** nếu:
+1. **x** Pareto-dominate **y** (tiêu chuẩn), **HOẶC**
+2. Cả **x** và **y** đều non-dominated, nhưng **x** nằm trong ROI còn **y** thì không, **HOẶC**
+3. Cả hai đều trong/ngoài ROI, nhưng ASF(x) < ASF(y)
+
+Hàm chính:
+- `r_dominates(obj_a, obj_b, pref, ideal, nadir)` — scalar check
+- `r_nondominated_sort(objectives, pref)` — vectorized R-sort trả về fronts
+- `r_assign_rank_and_crowding(objectives, pref)` — tích hợp R-rank + crowding
+
+> [!IMPORTANT]
+> [nondominated.py](file:///d:/LuanVanThs/code/algorithm/nondominated.py) hiện tại **giữ nguyên** (backward compatible). R-Dominance là module mới riêng, được gọi từ [inssso.py](file:///d:/LuanVanThs/code/algorithm/inssso.py) thay thế cho [assign_rank_and_crowding](file:///d:/LuanVanThs/code/algorithm/crowding.py#74-98).
+
+---
+
+### 3. ASF-Based gBest Selection
+
+#### [MODIFY] [crowding.py](file:///d:/LuanVanThs/code/algorithm/crowding.py)
+
+Thêm hàm `select_gbest_asf(population, pref)`:
+- Thay vì chọn gbest bằng crowding distance tournament, tối thiểu hóa ASF
+- Binary tournament: so sánh 2 candidates bằng ASF score, chọn nhỏ hơn
+- Ưu tiên lời giải trong ROI
+
+---
+
+### 4. Preference-Aware ABS
+
+#### [MODIFY] [abs_search.py](file:///d:/LuanVanThs/code/algorithm/abs_search.py)
+
+Cải tiến `calVcost`, `calHcost`, và [build_route](file:///d:/LuanVanThs/code/algorithm/abs_search.py#168-252) để tích hợp trọng số ưu tiên:
+
+- **Nếu w₂ (thời gian chờ) cao**: ABS ưu tiên customer có cửa sổ thời gian hẹp (due_date - ready_time nhỏ) → giảm waiting time
+- **Nếu w₁ (quãng đường) cao**: ABS ưu tiên customer gần nhất → greedy distance
+- **Nếu w₃ (cân bằng tải) cao**: ABS ưu tiên cân bằng makespan giữa các route
+- [build_route()](file:///d:/LuanVanThs/code/algorithm/abs_search.py#168-252): composite score `f = w₁*g_sc + w₂*tw_urgency + w₃*balance_sc`
+
+---
+
+### 5. Enhanced iNSSSO Main Loop
+
+#### [MODIFY] [inssso.py](file:///d:/LuanVanThs/code/algorithm/inssso.py)
+
+Thay đổi:
+- Constructor nhận `UserPreference` parameter
+- Ranking: gọi `r_assign_rank_and_crowding()` thay vì [assign_rank_and_crowding()](file:///d:/LuanVanThs/code/algorithm/crowding.py#74-98)
+- gBest: gọi `select_gbest_asf()` thay vì [select_gbest()](file:///d:/LuanVanThs/code/algorithm/crowding.py#142-170)
+- Stagnation tracking: dùng ASF thay vì f₁ riêng lẻ
+- Archive: [_try_add](file:///d:/LuanVanThs/code/algorithm/inssso.py#75-103) dùng ASF để quyết định khi ε-box trùng
+- Convergence tracking: log ASF thay vì IGD proxy
+
+---
+
+### 6. R-HV Metric
+
+#### [MODIFY] [metrics.py](file:///d:/LuanVanThs/code/benchmark/metrics.py)
+
+Thêm `r_hypervolume(p_approx, pref)`:
+- Chỉ tính HV cho vùng ROI (lọc solutions nằm trong ROI trước khi tính)
+- Reference point dùng `g + delta*(nadir - ideal)` thay vì 1.1
+
+---
+
+### 7. Config & CLI
+
+#### [MODIFY] [params.yaml](file:///d:/LuanVanThs/code/config/params.yaml)
+
+```yaml
+preference:
+  reference_point: [828.0, 0.0, 0.12]   # g: aspiration for f1, f2, f3
+  weights: [0.5, 0.3, 0.2]              # w: importance of f1, f2, f3
+  roi_delta: 0.1                         # ROI radius factor
+```
+
+#### [MODIFY] [main.py](file:///d:/LuanVanThs/code/main.py)
+
+- Load preference từ config, truyền vào iNSSSO
+- Hiển thị thêm ASF score, R-HV, ROI size trong output
+
+---
+
+## Verification Plan
+
+### Automated Test
+```bash
+.\venv\Scripts\python.exe main.py --mode single --instance C101 --time 30
+```
+
+**Tiêu chí**:
+1. ✅ Pareto front hội tụ quanh reference point g
+2. ✅ R-HV > 0 (solutions tập trung trong ROI)
+3. ✅ Best ASF score thấp (gần g)
+4. ✅ Không lỗi runtime, hoàn tất trong thời gian quy định

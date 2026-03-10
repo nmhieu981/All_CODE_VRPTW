@@ -1,0 +1,131 @@
+# Tối ưu Pareto Front cho iNSSSO — MO-VRPTW
+
+## Bối cảnh & Vấn đề
+
+Kết quả chạy C101 (30s) hiện tại cho thấy:
+- **PF Size = 100** nhưng nhiều lời giải trùng lặp (f1=828.94 xuất hiện 2 lần cùng giá trị f2, f3)
+- **HV = 0.081** — thấp, cho thấy Pareto front thiếu đa dạng và chưa hội tụ tốt
+- Pareto front chứa nhiều giải pháp giống nhau → thiếu diversity pressure
+
+Sau khi phân tích toàn bộ codebase, tôi xác định **7 điểm yếu chính** cần cải tiến:
+
+---
+
+## Proposed Changes
+
+### 1. Non-dominated Sort — Vectorized & Efficient
+
+#### [MODIFY] [nondominated.py](file:///d:/LuanVanThs/code/algorithm/nondominated.py)
+
+**Vấn đề**: Hàm [dominates()](file:///d:/LuanVanThs/code/algorithm/nondominated.py#14-27) sử dụng Python loop thuần, O(M·N²) chậm.
+
+**Cải tiến**:
+- Vectorize phép so sánh dominance bằng NumPy broadcasting
+- Giảm chi phí từ ~50ms xuống ~5ms cho N=200, M=3
+
+---
+
+### 2. Crowding & Selection — Loại trùng lặp + Adaptive Grid
+
+#### [MODIFY] [crowding.py](file:///d:/LuanVanThs/code/algorithm/crowding.py)
+
+**Vấn đề**: 
+- [select_best()](file:///d:/LuanVanThs/code/algorithm/crowding.py#83-99) gọi [assign_rank_and_crowding()](file:///d:/LuanVanThs/code/algorithm/crowding.py#57-81) nhưng không loại bỏ duplicate solutions
+- Crowding distance không đủ mạnh để duy trì diversity khi PF lớn
+
+**Cải tiến**:
+- Thêm **duplicate elimination** bằng epsilon-tolerance trước khi sorting
+- Thêm hàm `select_best_unique()` — loại bỏ lời giải trùng trước khi chọn
+- Cải tiến [select_gbest()](file:///d:/LuanVanThs/code/algorithm/crowding.py#101-120) — tournament selection thay vì roulette (ổn định hơn)
+
+---
+
+### 3. Main Loop iNSSSO — Adaptive Operators + External Archive
+
+#### [MODIFY] [inssso.py](file:///d:/LuanVanThs/code/algorithm/inssso.py)
+
+**Vấn đề chính** (nghiêm trọng nhất):
+1. **Không có External Archive** → PF bị mất lời giải tốt qua các generation
+2. **n_abs cố định** = 0.2 → không thích ứng theo giai đoạn tìm kiếm
+3. **Local search quá hiếm** (5% xác suất) → lãng phí cơ hội cải thiện
+4. **Không normalize objectives** trước khi ranking → f1 (hàng trăm) áp đảo f3 (0.1-0.2)
+
+**Cải tiến**:
+- **External Archive** (bounded, ε-dominance) — lưu trữ tất cả lời giải non-dominated đã tìm thấy, không bao giờ mất
+- **Adaptive n_abs**: tăng dần từ 0.1 → 0.4 khi tiến hóa stagnate
+- **Enhanced LS trigger**: tăng xác suất LS lên 15% cho rank-0 solutions, giảm cho rank cao
+- **Objective normalization** trong non-dominated sorting — chuẩn hóa [0,1] trước khi tính crowding
+- **Mutation operator bổ sung**: polynomial mutation trên keys (từ NSGA-II) tăng diversity
+
+---
+
+### 4. ABS Search — Regret-2 Insertion + Or-opt
+
+#### [MODIFY] [abs_search.py](file:///d:/LuanVanThs/code/algorithm/abs_search.py)
+
+**Vấn đề**: [build_route()](file:///d:/LuanVanThs/code/algorithm/abs_search.py#138-223) chỉ dùng roulette selection đơn giản, thiếu tối ưu cục bộ sau rebuild.
+
+**Cải tiến**:
+- Thêm **regret-2 insertion** — ưu tiên customer khó chèn (sẽ mất cơ hội nếu không chèn sớm)
+- Áp dụng **2-opt nhanh** sau mỗi route rebuild
+- Đa dạng hóa destruction: thêm **worst-removal** (loại customer gây tăng distance nhiều nhất) bên cạnh random removal hiện tại
+
+---
+
+### 5. Objective Normalization
+
+#### [MODIFY] [objectives.py](file:///d:/LuanVanThs/code/core/objectives.py)
+
+**Vấn đề**: 3 objectives có scale hoàn toàn khác nhau:
+- f1 ∈ [800, 1000]
+- f2 ∈ [0, 3]  
+- f3 ∈ [0.1, 0.2]
+
+Khi tính crowding distance, f1 áp đảo hoàn toàn → PF "phẳng" theo f1.
+
+**Cải tiến**: Không thay đổi [objectives.py](file:///d:/LuanVanThs/code/core/objectives.py) trực tiếp. Thay vào đó, normalize trong [crowding.py](file:///d:/LuanVanThs/code/algorithm/crowding.py) khi tính crowding distance — chuẩn hóa mỗi objective về [0,1] dựa trên min-max của population hiện tại.
+
+---
+
+### 6. Config Update
+
+#### [MODIFY] [params.yaml](file:///d:/LuanVanThs/code/config/params.yaml)
+
+Thêm tham số mới:
+- `archive_size: 200` — kích thước tối đa external archive
+- `epsilon: 0.01` — epsilon cho ε-dominance archive
+- `ls_rate_rank0: 0.15` — xác suất local search cho rank-0
+- `mutation_rate: 0.05` — xác suất polynomial mutation
+
+---
+
+## Tóm tắt Kỳ vọng Cải thiện
+
+| Metric | Hiện tại | Kỳ vọng |
+|--------|---------|---------|
+| HV | 0.081 | > 0.15 |
+| PF duplicates | Nhiều | 0 |
+| PF diversity | Thấp | Trải đều trên 3 mục tiêu |
+| Best f1 | 828.94 | ≤ 828.94 (không tệ hơn) |
+
+---
+
+## Verification Plan
+
+### Automated Test — So sánh trước/sau
+
+Chạy lại cùng lệnh test:
+```bash
+cd d:\LuanVanThs\code
+.\venv\Scripts\python.exe main.py --mode single --instance C101 --time 30
+```
+
+**Tiêu chí đánh giá**:
+1. ✅ HV tăng so với 0.081
+2. ✅ Không còn duplicate solutions trong Pareto front (mỗi cặp f1,f2,f3 phải unique)
+3. ✅ Best f1 không tệ hơn 828.94
+4. ✅ PF size hợp lý (≥ 10 lời giải unique)
+5. ✅ Chương trình chạy không lỗi, hoàn tất trong thời gian quy định
+
+### Manual Verification (người dùng)
+- So sánh file [results/pareto_C101.png](file:///d:/LuanVanThs/code/results/pareto_C101.png) trước/sau — kiểm tra Pareto front trải đều hơn

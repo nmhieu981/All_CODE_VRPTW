@@ -1,0 +1,41 @@
+
+============================================================
+  Instance : C101
+  Customers: 100
+  Vehicles : 25
+  Capacity : 200
+  Time     : 30s
+============================================================
+
+
+============================================================
+  Results
+============================================================
+  Generations : 64
+  Runtime     : 30.7s
+  PF Size     : 9
+  HV          : 0.065858
+  Nnds        : 9
+  Best Dist   : 828.94  (10 routes)
+
+  Pareto Front objectives (f1, f2, f3):
+    [1] f1=828.94  f2=0.0000  f3=0.204011  routes=10  unserved=0
+    [2] f1=838.76  f2=0.5146  f3=0.199048  routes=10  unserved=0
+    [3] f1=880.48  f2=0.1722  f3=0.148239  routes=10  unserved=0
+    [4] f1=911.97  f2=9.9841  f3=0.146447  routes=11  unserved=0
+    [5] f1=874.50  f2=7.9603  f3=0.194999  routes=11  unserved=0
+    [6] f1=866.36  f2=9.8179  f3=0.178874  routes=11  unserved=0
+    [7] f1=838.07  f2=0.2748  f3=0.201046  routes=10  unserved=0
+    [8] f1=916.28  f2=9.9841  f3=0.146110  routes=11  unserved=0
+    [9] f1=901.60  f2=20.1776  f3=0.145218  routes=12  unserved=0
+
+  Pareto plot saved to results/pareto_C101.png
+  Route plot saved to results/routes_C101.png
+  Convergence plot saved to results/convergence_C101.png
+============================================================
+
+
+---STDERR---
+10:05:58 [INFO] algorithm.inssso: iNSSSO starting on C101  (nSol=100, tRun=30s, nABS=0.20)
+10:06:04 [INFO] algorithm.inssso: Best init: 10 routes, dist=828.9
+10:06:35 [INFO] algorithm.inssso: iNSSSO finished: 64 gen, 30.7s, PF=9 (archive=9)

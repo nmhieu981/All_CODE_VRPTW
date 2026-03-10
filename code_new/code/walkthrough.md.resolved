@@ -1,0 +1,80 @@
+# iNSSSO Implementation — Walkthrough
+
+## What was built
+
+Full implementation of the **iNSSSO algorithm** (improved Nondominated Sorting Simplified Swarm Optimization) for **Multi-Objective VRPTW** on Solomon benchmarks.
+
+### Project Structure
+```
+g:\BaoCaoLuanVanThs\code\
+├── core/                    # Problem & solution representation
+│   ├── problem.py           # VRPTW loader (CSV + TXT)
+│   ├── solution.py          # Random-key encoding/decoding
+│   ├── objectives.py        # f1, f2, f3 objectives
+│   └── constraints.py       # Capacity & time window checks
+├── algorithm/               # Main algorithms
+│   ├── nondominated.py      # Fast non-dominated sorting
+│   ├── crowding.py          # Crowding distance + selection
+│   ├── abs_search.py        # A*-Based Search local search
+│   ├── nssso.py             # Base NSSSO
+│   └── inssso.py            # Full iNSSSO (greedy init + ABS)
+├── comparison/              # Comparison algorithms
+│   ├── mopso.py, nsga2.py, moead.py, spea2.py
+├── benchmark/               # Evaluation
+│   ├── metrics.py           # Cov, IGD, HV, Nnds
+│   └── runner.py            # Experiment orchestrator
+├── visualization/           # Plotting
+│   ├── pareto_plot.py, convergence_plot.py, route_visualizer.py
+├── config/params.yaml       # Algorithm parameters
+├── main.py                  # CLI entry point
+└── venv/                    # Python virtual environment
+```
+
+## Verification — C101 Instance (15s run)
+
+```
+Generations : 40
+PF Size     : 60
+HV          : 0.069
+All customers served: ✅ (0 unserved)
+
+Objectives range:
+  f1 (distance):  1806 – 2370
+  f2 (wait time): 36 – 75
+  f3 (imbalance): 0.18 – 0.27
+  Routes:         16 – 20
+```
+
+### Pareto Front
+![Pareto Front C101](C:/Users/wind/.gemini/antigravity/brain/7988c3a7-4040-4702-bb63-9f2be1346b73/pareto_C101.png)
+
+### Route Visualization
+![Routes C101](C:/Users/wind/.gemini/antigravity/brain/7988c3a7-4040-4702-bb63-9f2be1346b73/routes_C101.png)
+
+### Convergence
+![Convergence C101](C:/Users/wind/.gemini/antigravity/brain/7988c3a7-4040-4702-bb63-9f2be1346b73/convergence_C101.png)
+
+## Bug Fixes During Development
+
+| Bug | Root Cause | Fix |
+|-----|-----------|-----|
+| `restcus=0` for infeasible solutions | Parser only tracked constraint-violated customers, not those missing from decoded routes | Added missing-customer detection in `SolutionParser.parse()` |
+| Greedy NN routes destroyed after encoding | [from_routes](file:///g:/BaoCaoLuanVanThs/code/core/solution.py#65-114) used wrong argsort mapping — decode didn't reproduce original routes | Fixed key assignment: `keys[z_val-1] = rank-based key` |
+| IndexError in ABS | Separator IDs exceeded nvar bounds | Bounded separators to `[n_c+1, nvar]` range |
+| Slow SSO update | Per-element Python loop | Vectorized with `np.where` |
+
+## How to Run
+
+```bash
+cd g:\BaoCaoLuanVanThs\code
+.\venv\Scripts\activate
+
+# Single instance (quick test)
+python main.py --mode single --instance C101 --time 10
+
+# Compare 6 algorithms on one instance
+python main.py --mode compare --instance C101 --time 60 --runs 15
+
+# Full 56-instance Solomon benchmark
+python main.py --mode full --time 60 --runs 15
+```

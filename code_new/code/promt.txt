@@ -1,0 +1,656 @@
+# Prompt Vibe Coding cho bài báo iNSSSO - MO-VRPTW
+
+---
+
+## 🎯 MASTER PROMPT
+
+```
+Bạn là một expert software engineer chuyên về metaheuristic algorithms 
+và optimization. Hãy implement thuật toán iNSSSO từ bài báo:
+
+"A nondominated sorting simplified swarm optimization with local search 
+mechanisms for multi-objective vehicle routing problems with time windows"
+(Lai et al., Applied Soft Computing 2025)
+
+STACK: Python 3.10+
+STYLE: Clean, modular, well-documented, production-ready
+GOAL: Reproduce kết quả thực nghiệm trên Solomon benchmark instances
+```
+
+---
+
+## 📦 PROMPT 1 — Project Structure
+
+```
+Tạo cấu trúc project hoàn chỉnh cho việc implement iNSSSO algorithm:
+
+project/
+├── core/
+│   ├── problem.py        # VRPTW problem definition
+│   ├── solution.py       # Solution representation & parsing
+│   ├── objectives.py     # f1, f2, f3 fitness functions
+│   └── constraints.py    # Capacity & time window constraints
+├── algorithm/
+│   ├── inssso.py         # Main iNSSSO algorithm
+│   ├── nssso.py          # Base NSSSO
+│   ├── lkh_init.py       # LKH initialization wrapper
+│   ├── abs_search.py     # A*-Based Search local search
+│   ├── nondominated.py   # Nondominated sorting
+│   └── crowding.py       # Crowding distance calculation
+├── benchmark/
+│   ├── solomon_loader.py # Load Solomon instances
+│   ├── metrics.py        # Cov, IGD, HV, Nnds metrics
+│   └── runner.py         # Experiment runner
+├── comparison/
+│   ├── mopso.py
+│   ├── nsga2.py
+│   ├── moead.py
+│   └── spea2.py
+├── visualization/
+│   ├── pareto_plot.py
+│   ├── convergence_plot.py
+│   └── route_visualizer.py
+├── config/
+│   └── params.yaml       # Algorithm parameters
+├── data/
+│   └── solomon/          # Solomon benchmark files
+├── results/
+└── main.py
+
+Yêu cầu:
+- Dùng dataclasses cho data models
+- Type hints đầy đủ
+- Config-driven với YAML
+- Logging chuẩn
+- Unit test structure với pytest
+```
+
+---
+
+## 📦 PROMPT 2 — Problem & Solution Representation
+
+```
+Implement VRPTW problem representation theo Section 3 và 4.1 của bài báo:
+
+1. CLASS VRPTWInstance:
+   - Parse Solomon benchmark format (.txt)
+   - Fields: n_customers, n_vehicles, capacity
+   - Customer data: id, x, y, demand, ready_time, due_date, service_time
+   - Distance matrix: Euclidean distance
+   - Travel time matrix: distance / speed
+
+2. CLASS Solution (Random Key Representation - Section 4.1):
+   - Encode: real vector X = (x1, x2, ..., xnVar) where nVar = |V| + |C| - 1
+   - Decode: sort X → Z, values > |C| là route separators
+   - Method: encode() → numpy array
+   - Method: decode() → List[List[int]] (route sets)
+   - Method: clone()
+   
+   Ví dụ từ Fig. 2:
+   X = [0.51, 0.27, 0.32, 0.48, 0.63, 0.23, 0.46, 0.12, 0.11, 0.98, 0.34, 0.03]
+   Z = [12, 9, 8, 6, 2, 3, 11, 7, 4, 1, 5, 10]
+   Routes: r1={9,8,6,2,3}, r2={7,4,1,5,10}
+
+3. CLASS SolutionParser (Section 4.3):
+   - Validate time windows: sti ≤ tL_i
+   - Validate capacity: sum(demand) ≤ capacity
+   - Calculate: waiting_time wti = sti - tE_i
+   - Calculate: completion_time Tk cho mỗi route
+   - Handle infeasible: chuyển violated customers sang unasscus
+   - restcus: số customers không được assign
+   
+Constraints equations từ bài báo:
+- Eq(6): mỗi customer được serve đúng 1 lần
+- Eq(9): capacity constraint
+- Eq(10)-(14): time window constraints
+```
+
+---
+
+## 📦 PROMPT 3 — Objective Functions
+
+```
+Implement 3 fitness functions từ Section 4.4 của bài báo:
+
+PENALTY = 1e4  # penalty per unserved customer
+
+def f1(solution, instance, restcus) -> float:
+    """
+    Eq(15): Minimize total travel distance
+    f1 = sum(dtij * xijk) + restcus * 10^4
+    """
+
+def f2(solution, instance, restcus) -> float:
+    """
+    Eq(16): Minimize customer dissatisfaction (waiting time)
+    f2 = sum(wti for i in C) / n + restcus * 10^4
+    wti = sti - tE_i (waiting time khi arrive sớm hơn time window)
+    """
+
+def f3(solution, instance, restcus) -> float:
+    """
+    Eq(17): Minimize workload imbalance
+    f3 = (1/|sigma|) * sum((Tmax - Tk)/Tmax) + restcus * 10^4
+    sigma = set of used vehicles
+    Tk = total completion time of route k
+    """
+
+CLASS FitnessEvaluator:
+    - evaluate(solution) → Tuple[float, float, float]
+    - evaluate_batch(solutions) → List[Tuple[float, float, float]]
+    - Cache kết quả để tránh recompute
+
+LƯU Ý QUAN TRỌNG:
+- f2 đo waiting time của VEHICLE (arrive sớm hơn ready time của customer)
+- f3 dùng Tmax normalization như Eq(17), KHÁC với Eq(5) dùng |Tk - Tavg|
+- Implement cả 2 versions và flag để switch
+```
+
+---
+
+## 📦 PROMPT 4 — Nondominated Sorting & Crowding Distance
+
+```
+Implement nondominated sorting và crowding distance theo Section 2.3:
+
+1. NONDOMINATED SORTING (Table 2 approach):
+   
+   def dominates(sol_a, sol_b, objectives_a, objectives_b) -> bool:
+       """
+       sol_a dominates sol_b nếu:
+       - ∀i: fi(a) ≤ fi(b)  
+       - ∃j: fj(a) < fj(b)
+       """
+   
+   def nondominated_sort(population, objectives) -> List[List[int]]:
+       """
+       Return: fronts = [front1_indices, front2_indices, ...]
+       front1 = Pareto front (best)
+       Dùng fast nondominated sort O(MN²) hoặc
+       divide-and-conquer O(NlogM-1 N) nếu M<=3
+       """
+
+2. CROWDING DISTANCE (Table 2):
+   
+   def crowding_distance(front_indices, objectives) -> np.ndarray:
+       """
+       Với mỗi objective fj:
+       - Sort solutions trong front theo fj
+       - Boundary solutions: cd = 1 (capped từ infinity)
+       - Các solution còn lại:
+         cdj(Xl) = (fj(Xl+1) - fj(Xl-1)) / (fmax_j - fmin_j)
+       Total: cd(Xl) = sum(cdj(Xl) for j in objectives)
+       """
+
+3. SELECTION based on rank + crowding:
+   
+   def select_best(population, objectives, n_select) -> List[int]:
+       """
+       Ưu tiên: rank thấp hơn → crowding distance cao hơn
+       Giữ lại nSol solutions tốt nhất
+       """
+
+4. GBEST SELECTION:
+   
+   def select_gbest(pareto_front, objectives, crowding_distances) -> int:
+       """
+       Chọn gbest từ ψ1 (Pareto front)
+       Dựa trên crowding distance để đảm bảo diversity
+       Dùng roulette wheel selection với probability ∝ crowding distance
+       """
+```
+
+---
+
+## 📦 PROMPT 5 — A*-Based Search (ABS)
+
+```
+Implement ABS local search mechanism theo Section 4.5 và Tables 3-5:
+
+CLASS ABSearch:
+    
+    def __init__(self, instance, nABS=0.2):
+        self.instance = instance
+        self.nABS = nABS  # probability trigger ABS
+    
+    def should_apply(self) -> bool:
+        """Random trigger: apply if random() < nABS"""
+    
+    def select_routes_to_remove(self, solution) -> List[int]:
+        """
+        Eq(18): Selection probability cho mỗi route k
+        pk = exp(-10 * nCusk / max(nCusk))
+        Pk = pk / sum(pk)
+        
+        Chọn max(1, round(|τ|/3)) routes
+        Ưu tiên routes có ÍT customers (dễ consolidate)
+        Dùng roulette wheel selection
+        """
+    
+    def cal_vcost(self, customer, current_route, current_load) -> float:
+        """
+        Table 4: Feasibility check
+        v1: capacity check → inf nếu exceed
+        v2: time window check cho customer → inf nếu violate tL
+        v3: time window check cho depot → inf nếu không về kịp
+        Return: inf nếu bất kỳ vi = inf, else 0
+        """
+    
+    def cal_hcost(self, customer, open_customers, current_route) -> int:
+        """
+        Table 5: Heuristic cost - ước tính số customers có thể thêm
+        Duyệt qua remaining customers theo hfcj = dcj + tcj
+        dcj = distance to next customer
+        tcj = tL_cj / max(tL) (normalized deadline)
+        Count customers có thể serve hợp lệ
+        Return: h (count)
+        """
+    
+    def build_route(self, unassigned, current_solution) -> List[int]:
+        """
+        Table 3: Main ABS procedure
+        
+        STOPPING CRITERIA (3 conditions):
+        1. open set rỗng
+        2. validcus rỗng (không có customer feasible)
+        3. makespan >= avgmsp (cân bằng workload)
+        
+        SCORING composite criterion f:
+        gci = gcurrent + distance(current, ci)
+        gsc_i = gci / max(gci)  [normalized g-cost]
+        hsc_i = (max(hci) - hci) / max(hci)  [inverted h-cost]
+        fci = gsci + hsci
+        
+        Dùng ROULETTE WHEEL selection trên f
+        """
+    
+    def apply(self, solution) -> Solution:
+        """
+        Main ABS application:
+        1. Select routes to remove
+        2. Extract customers → unasscus
+        3. Rebuild routes với build_route()
+        4. Repeat until unasscus empty or max vehicles reached
+        Return: new solution
+        """
+```
+
+---
+
+## 📦 PROMPT 6 — iNSSSO Main Algorithm
+
+```
+Implement thuật toán iNSSSO hoàn chỉnh theo Fig. 1 và Section 2.3.3:
+
+CLASS iNSSSO:
+    
+    PARAMETERS (từ ANOVA optimal - Table 6):
+    - nSol = 100          # population size
+    - Cw = 0.99           # probability current solution
+    - Cg = 0.95           # probability gbest
+    - nABS = 0.2          # ABS trigger probability
+    - tRun = 60           # time limit (seconds)
+    
+    def initialize_population(self) -> List[Solution]:
+        """
+        Section 4.2: Initialization
+        X1: LKH-derived solution (route set → integer → real-number)
+        X2...XnSol: random real vectors in [0,1]
+        
+        LKH conversion process:
+        Step 1: Define separator set s = {|C|+1, ..., nVar}
+        Step 2: Convert route set → integer code Z
+        Step 3: Convert Z → real-number X via random ρ mapping
+        """
+    
+    def update_solution(self, Xi, G, t) -> Solution:
+        """
+        Eq(2): iNSSSO update rule (pBest REMOVED so với SSO gốc)
+        
+        for each variable j:
+            ρ ~ Uniform(0,1)
+            if ρ ∈ (0, Cg]:     xij = gj      (gbest)
+            elif ρ ∈ (Cg, Cw]:  xij = xi_prev  (current)
+            else:                xij = random   (exploration)
+        """
+    
+    def run(self, instance) -> Tuple[List[Solution], dict]:
+        """
+        Main loop theo Fig. 1:
+        
+        INITIALIZATION:
+        1. Initialize X0 với LKH + random
+        2. Evaluate fitness (f1, f2, f3)
+        3. Nondominated sort → fronts ψ1...ψk
+        4. Crowding distance calculation
+        
+        EVOLUTION LOOP (until tCur > tRun):
+        for i in range(nSol):
+            if random() < nABS:
+                Yi = ABS(Xi)           # local search branch
+            else:
+                gbest = select_gbest(ψ1)
+                Yi = update_solution(Xi, gbest)  # SSO branch
+            
+            Evaluate Yi
+        
+        POPULATION UPDATE:
+        1. Combine X + Y → merged pool (2*nSol solutions)
+        2. Nondominated sort merged pool
+        3. Crowding distance calculation
+        4. Select nSol best solutions (rank + crowding priority)
+        5. t = t + 1
+        
+        RETURN: Pareto front ψ1, convergence history
+        """
+    
+    def get_pareto_front(self) -> List[Solution]:
+        """Return current ψ1 (nondominated solutions)"""
+```
+
+---
+
+## 📦 PROMPT 7 — Performance Metrics
+
+```
+Implement 4 metrics đánh giá theo Section 5.1:
+
+CLASS PerformanceMetrics:
+
+    def coverage(self, P_approx, P_true) -> float:
+        """
+        Eq(19): Cov(P_approx, P_true)
+        = |{v ∈ P_true : ∃v' ∈ P_approx, v' dominates or equals v}|
+          / |P_true|
+        Range: [0, 1], higher = better
+        """
+    
+    def inverted_generational_distance(self, P_approx, P_true) -> float:
+        """
+        Eq(20): IGD = sum(d(v, P_approx) for v in P_true) / |P_true|
+        d(v, P_approx) = min Euclidean distance từ v đến P_approx
+        
+        NORMALIZE objectives trước khi tính:
+        fi_norm = fi / max(fi in P_true)
+        Range: [0, ∞), lower = better
+        """
+    
+    def hypervolume(self, P_approx, reference_point=None) -> float:
+        """
+        Eq(21): HV = volume of union of hypercubes
+        
+        Normalize theo nadir point:
+        fi_norm = fi / max(fi in P_approx)  [scaled to [0,1]]
+        
+        Reference point: (1.1, 1.1, 1.1) sau normalization
+        Dùng WFG algorithm cho 3 objectives (O(N log N))
+        """
+    
+    def n_nondominated_solutions(self, P_approx) -> int:
+        """Nnds = |P_approx| - đơn giản là count"""
+    
+    def estimate_true_pareto(self, all_runs_solutions) -> List:
+        """
+        Aggregate tất cả solutions từ tất cả algorithms, tất cả runs
+        Apply nondominated sort → lấy front 1
+        Đây là P_true ước lượng cho bài toán
+        """
+    
+    def compute_all(self, P_approx, P_true) -> dict:
+        """
+        Return dict với mean và std của 4 metrics
+        {
+            'Cov': (mean, std),
+            'IGD': (mean, std), 
+            'HV':  (mean, std),
+            'Nnds': (mean, std)
+        }
+        """
+```
+
+---
+
+## 📦 PROMPT 8 — Experiment Runner
+
+```
+Implement experiment runner reproduce kết quả bài báo:
+
+CLASS ExperimentRunner:
+    
+    CONFIG:
+    - n_runs = 15          # independent runs per instance
+    - time_limit = 60      # seconds per run
+    - population_size = 100
+    - solomon_groups = ['C1','C2','R1','R2','RC1','RC2']
+    - n_customers = 100    # focus on 100-customer instances
+    
+    def run_single_algorithm(self, algorithm, instance, n_runs) -> dict:
+        """
+        Chạy algorithm n_runs lần trên một instance
+        Thu thập: Pareto front, convergence curve, runtime
+        Return: aggregated metrics (mean ± std)
+        """
+    
+    def run_comparison(self, instance) -> DataFrame:
+        """
+        So sánh 6 algorithms: MOPSO, NSGA-II, MOEA/D, SPEA2, NSSSO, iNSSSO
+        
+        QUAN TRỌNG - Setup giống bài báo:
+        - NSSSO: không có LKH, không có ABS
+        - MOPSO/NSGA-II/MOEA/D/SPEA2: CÓ LKH initialization, KHÔNG có ABS
+        - iNSSSO: CÓ cả LKH + ABS
+        
+        True Pareto: aggregate từ tất cả algorithms, tất cả runs
+        Return: DataFrame với Cov, IGD, HV, Nnds cho mỗi algorithm
+        """
+    
+    def run_ablation_study(self, instance) -> DataFrame:
+        """
+        Section 5.3.3: Test ABS integration
+        So sánh: [MOPSO, iMOPSO, NSGA-II, iNSGA-II, MOEA/D, iMOEA/D, 
+                  SPEA2, iSPEA2, NSSSO, iNSSSO]
+        Calculate improvement rates (Table 17)
+        """
+    
+    def run_parameter_tuning(self) -> dict:
+        """
+        Section 5.2: ANOVA parameter tuning
+        Full factorial: Cw ∈ {0.97, 0.99}
+                       Cg ∈ {0.85, 0.90, 0.95}  
+                       nABS ∈ {0, 0.2, 0.4, 0.6}
+        24 treatments × 10 replicates = 240 trials
+        Normalize IGD [0,1] với min-max
+        Return: ANOVA table + optimal params
+        """
+    
+    def full_solomon_benchmark(self) -> None:
+        """
+        Chạy toàn bộ 56 instances (C1×9, R1×12, RC1×8, C2×8, R2×11, RC2×8)
+        Save results to CSV
+        Generate Tables 11-16 style output
+        Tính overall performance và ranking
+        """
+```
+
+---
+
+## 📦 PROMPT 9 — Visualization
+
+```
+Implement visualization module reproduce các figures trong bài báo:
+
+1. CONVERGENCE PLOT (Fig. 8):
+   
+   def plot_convergence(convergence_data: dict, instance_name: str):
+       """
+       4-subplot figure: C101, C201, R101, RC101
+       Y-axis: Mean IGD (Log Scale)
+       X-axis: Seconds (0-60)
+       Lines: MOPSO, NSGA-II, MOEA/D, SPEA2, NSSSO*, iNSSSO
+       * NSSSO chỉ show trong C101 plot
+       Style: matplotlib với log scale y-axis
+       """
+
+2. PARETO FRONT VISUALIZATION (Fig. 9):
+   
+   def plot_pareto_3d(all_solutions: dict, instance_name: str):
+       """
+       6 scatter plots (2×3 grid): các 2D projections
+       f1 vs f3, f1 vs f2 (upper row)
+       f2 vs f1, f2 vs f3 (lower row style)
+       Colors: iNSSSO=blue, NSSSO=cyan, SPEA2, MOEA/D, NSGA-II, MOPSO
+       True PF: red circles (hollow)
+       """
+
+3. METRIC COMPARISON PLOTS (Fig. 5-7):
+   
+   def plot_metric_comparison(results: DataFrame, metric: str):
+       """
+       Line plot với 56 instances trên x-axis
+       Y-axis: metric value (Cov/IGD/HV)
+       5 lines: MOPSO, NSGA-II, MOEA/D, SPEA2, iNSSSO
+       """
+
+4. PARAMETER TUNING PLOTS (Fig. 3):
+   
+   def plot_main_effects(anova_results: dict):
+       """
+       3 subplots: Cw, Cg, nABS effects trên IGD
+       Y-axis: mean IGD
+       """
+
+5. ROUTE VISUALIZATION:
+   
+   def plot_routes(solution: Solution, instance: VRPTWInstance):
+       """
+       Scatter plot customers với coordinates
+       Mỗi route một màu khác nhau
+       Arrows chỉ hướng di chuyển
+       Depot đánh dấu đặc biệt
+       Time window bars cho mỗi customer
+       """
+```
+
+---
+
+## 📦 PROMPT 10 — Integration & Testing
+
+```
+Tạo integration tests và main entry point:
+
+1. UNIT TESTS (pytest):
+
+test_solution_encoding:
+    - Test encode/decode round trip
+    - Test với example từ Fig. 2 của bài báo
+    - Edge cases: tất cả separators, empty routes
+
+test_solution_parsing:
+    - Test feasible solution → restcus = 0
+    - Test capacity violation → customer moved to unasscus
+    - Test time window violation → correct handling
+
+test_objectives:
+    - Test f1, f2, f3 với known solution
+    - Test penalty term với infeasible solution
+    - Test f3 normalization logic
+
+test_nondominated_sort:
+    - Test với 2D và 3D objectives
+    - Verify front assignments
+    - Test crowding distance boundary = 1
+
+test_abs:
+    - Test cal_vcost feasibility checks
+    - Test cal_hcost heuristic counting
+    - Test route building với simple instance
+    - Test stopping criteria
+
+2. INTEGRATION TEST:
+
+def test_full_run_c101():
+    """
+    Load C101 instance
+    Run iNSSSO for 10 seconds
+    Verify: returns valid Pareto front
+    Verify: all solutions feasible (restcus = 0)
+    Verify: objectives values reasonable
+    """
+
+3. MAIN ENTRY POINT:
+
+# main.py
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['single','compare','ablation','tune','full'])
+    parser.add_argument('--instance', default='C101')
+    parser.add_argument('--time', type=int, default=60)
+    parser.add_argument('--runs', type=int, default=15)
+    
+    # Modes:
+    # single: chạy iNSSSO trên 1 instance, plot routes + Pareto
+    # compare: so sánh 6 algorithms
+    # ablation: ABS integration study  
+    # tune: parameter tuning ANOVA
+    # full: toàn bộ 56 Solomon instances
+```
+
+---
+
+## 🚀 QUICK START PROMPT
+
+```
+Tôi muốn implement nhanh prototype của iNSSSO. 
+Hãy bắt đầu với:
+
+1. Một file duy nhất `inssso_prototype.py`
+2. Dùng numpy, scipy, matplotlib
+3. Hard-code instance C101 từ Solomon benchmark
+4. Implement đủ để chạy được:
+   - Random key solution representation
+   - Solution parsing với time window & capacity
+   - Ba objective functions f1, f2, f3
+   - Fast nondominated sort
+   - Crowding distance
+   - SSO update rule (Eq. 2)  
+   - ABS local search (simplified)
+   - Main loop 60 seconds
+5. Plot Pareto front và convergence curve
+6. In ra IGD, HV, Nnds cuối cùng
+
+Không cần LKH (thay bằng greedy nearest neighbor initialization)
+Không cần so sánh với các thuật toán khác
+Chỉ cần chạy được và cho kết quả hợp lý
+```
+
+---
+
+## 📋 CHECKLIST IMPLEMENTATION
+
+```
+□ Solomon benchmark data loader (.txt format)
+□ Random key encoding/decoding (Fig. 2)
+□ Solution parser với infeasibility handling
+□ f1: total distance + penalty
+□ f2: waiting time + penalty  
+□ f3: workload imbalance + penalty (Eq.17)
+□ Fast nondominated sort
+□ Crowding distance (capped at 1 for boundaries)
+□ Gbest selection từ Pareto front
+□ SSO update rule Eq.(2) không có pBest
+□ ABS: route selection Eq.(18)
+□ ABS: calVcost (Table 4)
+□ ABS: calHcost (Table 5)  
+□ ABS: route builder (Table 3)
+□ LKH wrapper (hoặc greedy substitute)
+□ iNSSSO main loop (Fig. 1)
+□ Coverage metric (Eq.19)
+□ IGD metric (Eq.20)
+□ HV metric (Eq.21) - WFG algorithm
+□ Nnds counter
+□ True Pareto estimation
+□ Experiment runner (15 runs)
+□ Statistical test (Friedman + Holm)
+□ Convergence plots (Fig.8 style)
+□ Pareto scatter plots (Fig.9 style)
+```
